@@ -1,0 +1,152 @@
+﻿@page
+@attribute [Microsoft.AspNetCore.Authorization.Authorize] // Requiere autenticación JWT
+@model ProtectedModel
+@{
+    ViewData["Title"] = "Página Protegida";
+}
+
+<div class="container mt-5">
+    <div class="jumbotron">
+        <h1 class="display-4">¡Bienvenido a la Zona Protegida, @User.Identity.Name!</h1>
+        <p class="lead">Este contenido solo es visible si tienes un token JWT válido.</p>
+        <hr class="my-4">
+        <p>Tu token expira en: <span id="expiresIn">Cargando...</span></p>
+        <p id="expirationMessage" class="text-danger fw-bold d-none">¡Tu sesión está a punto de expirar! Por favor, refresca el token.</p>
+        <button id="refreshTokenBtn" class="btn btn-warning mt-3">Refrescar Token</button>
+        <button id="logoutBtn" class="btn btn-danger mt-3">Cerrar Sesión</button>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        const jwtExpirationMinutes = @(int.Parse(Model.Configuration.GetSection("Jwt")["ExpirationMinutes"]));
+        let tokenExpirationTime;
+        let countdownInterval;
+        let tokenRefreshTimeout;
+
+        function parseJwt(token) {
+            try {
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+                return JSON.parse(jsonPayload);
+            } catch (e) {
+                console.error("Error al parsear JWT:", e);
+                return null;
+            }
+        }
+
+        function getTokenExpiration() {
+            const token = getCookie('jwtToken');
+            if (token) {
+                const decodedToken = parseJwt(token);
+                if (decodedToken && decodedToken.exp) {
+                    // 'exp' está en segundos desde la época UNIX
+                    tokenExpirationTime = decodedToken.exp * 1000; // Convertir a milisegundos
+                    startCountdown();
+                    return;
+                }
+            }
+            document.getElementById('expiresIn').innerText = 'No se encontró token o expiración.';
+            // Si no hay token válido, forzar logout (esto es más una medida de seguridad extra)
+            logout();
+        }
+
+        function startCountdown() {
+            clearInterval(countdownInterval); // Limpiar cualquier intervalo anterior
+            countdownInterval = setInterval(() => {
+                const now = new Date().getTime();
+                const distance = tokenExpirationTime - now;
+
+                if (distance < 0) {
+                    clearInterval(countdownInterval);
+                    document.getElementById('expiresIn').innerText = '¡Expirado!';
+                    document.getElementById('expirationMessage').classList.remove('d-none');
+                    // Redirigir al login o mostrar mensaje para refrescar
+                    alert('Tu sesión ha expirado. Por favor, inicia sesión de nuevo.');
+                    logout();
+                    return;
+                }
+
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+                document.getElementById('expiresIn').innerText = `${minutes}m ${seconds}s`;
+
+                // Mostrar mensaje de advertencia 30 segundos antes de expirar
+                if (distance < 30 * 1000) {
+                    document.getElementById('expirationMessage').classList.remove('d-none');
+                } else {
+                    document.getElementById('expirationMessage').classList.add('d-none');
+                }
+            }, 1000);
+
+            // Programar refresh automático (ejemplo: 15 segundos antes de expirar)
+            // Esto es solo un ejemplo, la lógica de refresh real podría ser diferente
+            clearTimeout(tokenRefreshTimeout);
+            tokenRefreshTimeout = setTimeout(() => {
+                // Si el usuario no ha refrescado, podríamos intentar un refresh automático o simplemente dejar que expire.
+                // Para esta demo, el usuario debe hacer clic en el botón.
+            }, tokenExpirationTime - new Date().getTime() - (15 * 1000));
+        }
+
+        async function refreshToken() {
+            try {
+                const response = await fetch('/api/refresh-token', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + getCookie('jwtToken'), // Envía el token actual para validarlo
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.token) {
+                        // Actualiza el token en la cookie
+                        document.cookie = `jwtToken=${data.token}; path=/; HttpOnly; Secure; SameSite=Lax; expires=${new Date(new Date().getTime() + (jwtExpirationMinutes + 5) * 60 * 1000).toUTCString()}`;
+                        alert('Token refrescado exitosamente!');
+                        getTokenExpiration(); // Reinicia el contador
+                    }
+                } else if (response.status === 401) {
+                    // Token inválido o expirado para el refresh
+                    alert('No se pudo refrescar el token. Tu sesión ha expirado, por favor inicia sesión de nuevo.');
+                    logout();
+                } else {
+                    alert('Error al refrescar el token: ' + response.statusText);
+                    logout(); // En caso de otros errores, mejor cerrar sesión
+                }
+            } catch (error) {
+                console.error('Error refrescando token:', error);
+                alert('Error de red o servidor al refrescar el token.');
+                logout();
+            }
+        }
+
+        function logout() {
+            // Eliminar la cookie del token
+            document.cookie = 'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;';
+            clearInterval(countdownInterval); // Detener el contador
+            clearTimeout(tokenRefreshTimeout); // Detener el timeout de refresh
+            window.location.href = '/Login?logout=true'; // Redirigir al login con un parámetro para el mensaje
+        }
+
+        // Función para obtener el valor de una cookie
+        function getCookie(name) {
+            const nameEQ = name + "=";
+            const ca = document.cookie.split(';');
+            for(let i=0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+            }
+            return null;
+        }
+
+        document.addEventListener('DOMContentLoaded', getTokenExpiration);
+        document.getElementById('refreshTokenBtn').addEventListener('click', refreshToken);
+        document.getElementById('logoutBtn').addEventListener('click', logout);
+    </script>
+}
