@@ -45,9 +45,19 @@ namespace JWT.Controllers
 
                 Console.WriteLine($"Nuevo token generado, expira en {expirationMinutes} minutos");
 
-                // Limpiar cookie anterior antes de establecer la nueva
-                Response.Cookies.Delete("jwtToken");
+                // Limpiar cookie anterior con múltiples configuraciones
+                var cookieOptions = new[]
+                {
+                    new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.Lax },
+                    new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Lax }
+                };
 
+                foreach (var option in cookieOptions)
+                {
+                    Response.Cookies.Delete("jwtToken", option);
+                }
+
+                // Establecer nueva cookie
                 Response.Cookies.Append("jwtToken", newJwtToken, new CookieOptions
                 {
                     HttpOnly = true,
@@ -98,7 +108,6 @@ namespace JWT.Controllers
 
                 if (string.IsNullOrEmpty(expClaim))
                 {
-                    // Si no encontramos el claim de expiración, calculamos basado en la configuración
                     var expirationMinutes = int.Parse(_configuration.GetSection("Jwt")["ExpirationMinutes"]);
                     var estimatedExpiration = DateTime.UtcNow.AddMinutes(expirationMinutes);
 
@@ -138,30 +147,32 @@ namespace JWT.Controllers
         }
 
         [HttpPost("logout")]
-        [AllowAnonymous] // Permitir logout sin autenticación
+        [AllowAnonymous]
         public IActionResult Logout()
         {
             try
             {
                 Console.WriteLine("=== LOGOUT ENDPOINT LLAMADO ===");
 
-                // Limpiar cookie con diferentes configuraciones
-                Response.Cookies.Delete("jwtToken", new CookieOptions
+                // Limpiar cookies con múltiples configuraciones
+                var cookieOptions = new[]
                 {
-                    Path = "/",
-                    Secure = false,
-                    SameSite = SameSiteMode.Lax
-                });
+                    new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.Lax },
+                    new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Lax },
+                    new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.Strict },
+                    new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Strict }
+                };
 
-                // También establecer cookie vacía con fecha pasada
-                Response.Cookies.Append("jwtToken", "", new CookieOptions
+                foreach (var option in cookieOptions)
                 {
-                    Path = "/",
-                    Expires = DateTime.UtcNow.AddDays(-1),
-                    Secure = false,
-                    SameSite = SameSiteMode.Lax
-                });
+                    Response.Cookies.Delete("jwtToken", option);
 
+                    // También establecer cookie vacía con fecha pasada
+                    option.Expires = DateTime.UtcNow.AddDays(-1);
+                    Response.Cookies.Append("jwtToken", "", option);
+                }
+
+                Console.WriteLine("Logout completado - cookies limpiadas");
                 return Ok(new { message = "Sesión cerrada exitosamente" });
             }
             catch (Exception ex)
@@ -171,7 +182,6 @@ namespace JWT.Controllers
             }
         }
 
-        // Endpoint de prueba para verificar que los controladores funcionan
         [HttpGet("test")]
         [AllowAnonymous]
         public IActionResult Test()

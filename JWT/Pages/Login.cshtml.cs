@@ -26,28 +26,12 @@ namespace JWT.Pages
 
         public void OnGet()
         {
-            // IMPORTANTE: Limpiar cualquier cookie existente al cargar la página de login
-            Console.WriteLine("=== LOGIN GET - Limpiando cookies existentes ===");
+            Console.WriteLine("=== LOGIN GET - LIMPIEZA COMPLETA ===");
 
-            if (Request.Cookies.ContainsKey("jwtToken"))
-            {
-                Console.WriteLine("Cookie jwtToken encontrada, eliminándola...");
-                Response.Cookies.Delete("jwtToken", new CookieOptions
-                {
-                    Path = "/",
-                    Secure = false, // Cambiar a true en producción
-                    SameSite = SameSiteMode.Lax
-                });
-            }
+            // Limpieza exhaustiva del lado del servidor
+            ClearAllCookieVariations();
 
-            // También limpiar cualquier cookie con diferentes configuraciones
-            Response.Cookies.Append("jwtToken", "", new CookieOptions
-            {
-                Path = "/",
-                Expires = DateTime.UtcNow.AddDays(-1), // Fecha en el pasado para eliminar
-                Secure = false,
-                SameSite = SameSiteMode.Lax
-            });
+            Console.WriteLine("Limpieza del servidor completada");
         }
 
         public IActionResult OnPost()
@@ -55,15 +39,18 @@ namespace JWT.Pages
             Console.WriteLine("=== LOGIN POST INICIADO ===");
             Console.WriteLine($"Usuario: {Username}");
 
-            // Limpiar cookies antes de crear nuevas
-            Response.Cookies.Delete("jwtToken");
+            // Limpieza ANTES de crear el nuevo token
+            ClearAllCookieVariations();
+
+            // Esperar un poco para asegurar limpieza
+            System.Threading.Thread.Sleep(200);
 
             if (Username == "admin" && Password == "password")
             {
                 try
                 {
                     var token = _jwtService.GenerateToken(Username);
-                    Console.WriteLine($"Token generado: {token.Substring(0, 50)}...");
+                    Console.WriteLine($"Nuevo token generado: {token.Substring(0, 50)}...");
 
                     if (!int.TryParse(_configuration.GetSection("Jwt")["ExpirationMinutes"], out int expirationMinutes))
                     {
@@ -72,8 +59,8 @@ namespace JWT.Pages
                     }
 
                     var cookieExpiration = DateTime.UtcNow.AddMinutes(expirationMinutes);
-                    Console.WriteLine($"Cookie expira en: {cookieExpiration}");
 
+                    // Establecer la nueva cookie con configuración limpia
                     Response.Cookies.Append("jwtToken", token, new CookieOptions
                     {
                         HttpOnly = true,
@@ -84,7 +71,11 @@ namespace JWT.Pages
                         SameSite = SameSiteMode.Lax
                     });
 
-                    Console.WriteLine("Cookie establecida exitosamente");
+                    Console.WriteLine($"Nueva cookie establecida, expira: {cookieExpiration}");
+
+                    // Esperar un poco antes de redirigir
+                    System.Threading.Thread.Sleep(100);
+
                     return RedirectToPage("/Protected");
                 }
                 catch (Exception ex)
@@ -99,6 +90,49 @@ namespace JWT.Pages
                 Console.WriteLine("Credenciales incorrectas");
                 ErrorMessage = "Credenciales incorrectas.";
                 return Page();
+            }
+        }
+
+        private void ClearAllCookieVariations()
+        {
+            // Lista de todas las posibles configuraciones de cookies a limpiar
+            var cookieOptions = new[]
+            {
+                new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.Lax },
+                new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Lax },
+                new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.Strict },
+                new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Strict },
+                new CookieOptions { Path = "/", Secure = false, SameSite = SameSiteMode.None },
+                new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.None },
+                new CookieOptions { Path = "/Login", Secure = false, SameSite = SameSiteMode.Lax },
+                new CookieOptions { Path = "/Protected", Secure = false, SameSite = SameSiteMode.Lax }
+            };
+
+            var cookieNames = new[] { "jwtToken", "jwt", "token", "auth" };
+
+            foreach (var name in cookieNames)
+            {
+                foreach (var option in cookieOptions)
+                {
+                    try
+                    {
+                        Response.Cookies.Delete(name, option);
+
+                        // También establecer cookie vacía con fecha pasada
+                        var expiredOption = new CookieOptions
+                        {
+                            Path = option.Path,
+                            Secure = option.Secure,
+                            SameSite = option.SameSite,
+                            Expires = DateTime.UtcNow.AddDays(-1)
+                        };
+                        Response.Cookies.Append(name, "", expiredOption);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error limpiando cookie {name}: {ex.Message}");
+                    }
+                }
             }
         }
     }
