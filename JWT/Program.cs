@@ -1,16 +1,20 @@
+using JWT.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using System.Security.Claims; 
-
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddRazorPages();
-builder.Services.AddScoped<JWT.Services.JwtService>();
 
-// Configuración de JWT
+// Agregar controladores para la API
+builder.Services.AddControllers();
+
+// Registrar el servicio JWT
+builder.Services.AddScoped<JwtService>();
+
+// Configurar autenticación JWT
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var key = Encoding.ASCII.GetBytes(jwtSettings["Key"]);
 
@@ -21,7 +25,7 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.RequireHttpsMetadata = false; 
+    options.RequireHttpsMetadata = false; // Solo para desarrollo
     options.SaveToken = true;
     options.TokenValidationParameters = new TokenValidationParameters
     {
@@ -31,31 +35,30 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = jwtSettings["Issuer"],
         ValidateAudience = true,
         ValidAudience = jwtSettings["Audience"],
-        ValidateLifetime = true, // Expiración del token
-        ClockSkew = TimeSpan.Zero // El tiempo de gracia antes de que el token sea considerado expirado
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero // Eliminar el margen de 5 minutos por defecto
     };
 
-    
+    // Configurar para leer el token desde cookies
     options.Events = new JwtBearerEvents
     {
-        OnChallenge = context =>
+        OnMessageReceived = context =>
         {
-            context.HandleResponse();
-            context.Response.StatusCode = 401;
-            context.Response.ContentType = "application/json";
-            return context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { message = "Token expirado o no válido.", logout = true }));
+            // Leer el token desde la cookie
+            if (context.Request.Cookies.ContainsKey("jwtToken"))
+            {
+                context.Token = context.Request.Cookies["jwtToken"];
+            }
+            return Task.CompletedTask;
         }
     };
 });
 
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("RequireAuthenticatedUser", policy => policy.RequireAuthenticatedUser());
-});
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-
+// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
@@ -67,11 +70,13 @@ app.UseStaticFiles();
 
 app.UseRouting();
 
-
-app.UseAuthentication();
+// Importante: el orden es crucial
+app.UseAuthentication(); // Debe ir antes de UseAuthorization
 app.UseAuthorization();
 
 app.MapRazorPages();
+
+// Mapear controladores
 app.MapControllers();
 
 app.Run();

@@ -1,5 +1,5 @@
 ﻿@page
-@attribute [Microsoft.AspNetCore.Authorization.Authorize] // Requiere autenticación JWT
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @model ProtectedModel
 @{
     ViewData["Title"] = "Página Protegida";
@@ -11,9 +11,23 @@
         <p class="lead">Este contenido solo es visible si tienes un token JWT válido.</p>
         <hr class="my-4">
         <p>Tu token expira en: <span id="expiresIn">Cargando...</span></p>
-        <p id="expirationMessage" class="text-danger fw-bold d-none">¡Tu sesión está a punto de expirar! Por favor, refresca el token.</p>
-        <button id="refreshTokenBtn" class="btn btn-warning mt-3">Refrescar Token</button>
-        <button id="logoutBtn" class="btn btn-danger mt-3">Cerrar Sesión</button>
+        <p id="expirationMessage" class="text-warning fw-bold d-none">¡Tu sesión se refrescará automáticamente pronto!</p>
+        <p id="criticalMessage" class="text-danger fw-bold d-none">¡Tu sesión está a punto de expirar!</p>
+
+        <div class="mt-3">
+            <button id="refreshTokenBtn" class="btn btn-warning">Refrescar Token Ahora</button>
+            <button id="logoutBtn" class="btn btn-danger">Cerrar Sesión</button>
+            <button id="toggleAutoRefresh" class="btn btn-info">Auto-refresh: <span id="autoRefreshStatus">Activado</span></button>
+        </div>
+
+        <!-- Panel de debug -->
+        <div class="mt-4">
+            <button id="debugBtn" class="btn btn-secondary btn-sm">Mostrar Debug</button>
+            <div id="debugInfo" class="mt-2 p-3 bg-light border rounded d-none">
+                <h6>Información de Debug:</h6>
+                <div id="debugContent"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -22,131 +36,261 @@
         const jwtExpirationMinutes = @(int.Parse(Model.Configuration.GetSection("Jwt")["ExpirationMinutes"]));
         let tokenExpirationTime;
         let countdownInterval;
-        let tokenRefreshTimeout;
+        let autoRefreshTimeout;
 
-        function parseJwt(token) {
+        // Configuración de tiempos (en minutos)
+        const WARNING_TIME_MINUTES = 15;
+        const CRITICAL_TIME_MINUTES = 5;
+        const AUTO_REFRESH_TIME_MINUTES = 10;
+        let AUTO_REFRESH_ENABLED = true;
+
+        async function getTokenExpiration() {
             try {
-                const base64Url = token.split('.')[1];
-                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                }).join(''));
-                return JSON.parse(jsonPayload);
-            } catch (e) {
-                console.error("Error al parsear JWT:", e);
-                return null;
-            }
-        }
+                console.log('Obteniendo información del token...');
 
-        function getTokenExpiration() {
-            const token = getCookie('jwtToken');
-            if (token) {
-                const decodedToken = parseJwt(token);
-                if (decodedToken && decodedToken.exp) {
-                    // 'exp' está en segundos desde la época UNIX
-                    tokenExpirationTime = decodedToken.exp * 1000; // Convertir a milisegundos
-                    startCountdown();
-                    return;
-                }
-            }
-            document.getElementById('expiresIn').innerText = 'No se encontró token o expiración.';
-            // Si no hay token válido, forzar logout (esto es más una medida de seguridad extra)
-            logout();
-        }
-
-        function startCountdown() {
-            clearInterval(countdownInterval); // Limpiar cualquier intervalo anterior
-            countdownInterval = setInterval(() => {
-                const now = new Date().getTime();
-                const distance = tokenExpirationTime - now;
-
-                if (distance < 0) {
-                    clearInterval(countdownInterval);
-                    document.getElementById('expiresIn').innerText = '¡Expirado!';
-                    document.getElementById('expirationMessage').classList.remove('d-none');
-                    // Redirigir al login o mostrar mensaje para refrescar
-                    alert('Tu sesión ha expirado. Por favor, inicia sesión de nuevo.');
-                    logout();
-                    return;
-                }
-
-                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-
-                document.getElementById('expiresIn').innerText = `${minutes}m ${seconds}s`;
-
-                // Mostrar mensaje de advertencia 30 segundos antes de expirar
-                if (distance < 30 * 1000) {
-                    document.getElementById('expirationMessage').classList.remove('d-none');
-                } else {
-                    document.getElementById('expirationMessage').classList.add('d-none');
-                }
-            }, 1000);
-
-            // Programar refresh automático (ejemplo: 15 segundos antes de expirar)
-            // Esto es solo un ejemplo, la lógica de refresh real podría ser diferente
-            clearTimeout(tokenRefreshTimeout);
-            tokenRefreshTimeout = setTimeout(() => {
-                // Si el usuario no ha refrescado, podríamos intentar un refresh automático o simplemente dejar que expire.
-                // Para esta demo, el usuario debe hacer clic en el botón.
-            }, tokenExpirationTime - new Date().getTime() - (15 * 1000));
-        }
-
-        async function refreshToken() {
-            try {
-                const response = await fetch('/api/refresh-token', {
-                    method: 'POST',
+                const response = await fetch('/api/token-info', {
+                    method: 'GET',
+                    credentials: 'include',
                     headers: {
-                        'Authorization': 'Bearer ' + getCookie('jwtToken'), // Envía el token actual para validarlo
+                        'Accept': 'application/json',
                         'Content-Type': 'application/json'
                     }
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.token) {
-                        // Actualiza el token en la cookie
-                        document.cookie = `jwtToken=${data.token}; path=/; HttpOnly; Secure; SameSite=Lax; expires=${new Date(new Date().getTime() + (jwtExpirationMinutes + 5) * 60 * 1000).toUTCString()}`;
-                        alert('Token refrescado exitosamente!');
-                        getTokenExpiration(); // Reinicia el contador
+                    console.log('Token info recibida:', data);
+
+                    tokenExpirationTime = new Date(data.expiresAt).getTime();
+                    console.log('Token expira en:', new Date(tokenExpirationTime));
+
+                    updateDebugInfo(data);
+                    startCountdown();
+
+                    if (AUTO_REFRESH_ENABLED) {
+                        scheduleAutoRefresh();
                     }
-                } else if (response.status === 401) {
-                    // Token inválido o expirado para el refresh
-                    alert('No se pudo refrescar el token. Tu sesión ha expirado, por favor inicia sesión de nuevo.');
-                    logout();
                 } else {
-                    alert('Error al refrescar el token: ' + response.statusText);
-                    logout(); // En caso de otros errores, mejor cerrar sesión
+                    const errorText = await response.text();
+                    console.error('Error del servidor:', response.status, errorText);
+                    document.getElementById('expiresIn').innerText = `Error ${response.status}`;
+
+                    if (response.status === 401) {
+                        setTimeout(() => logout(), 2000);
+                    }
+                }
+            } catch (error) {
+                console.error('Error de red:', error);
+                document.getElementById('expiresIn').innerText = 'Error de conexión.';
+            }
+        }
+
+        function scheduleAutoRefresh() {
+            if (!AUTO_REFRESH_ENABLED) {
+                console.log('Auto-refresh desactivado');
+                return;
+            }
+
+            if (autoRefreshTimeout) {
+                clearTimeout(autoRefreshTimeout);
+            }
+
+            const now = new Date().getTime();
+            const totalTimeLeft = tokenExpirationTime - now;
+            const timeUntilAutoRefresh = totalTimeLeft - (AUTO_REFRESH_TIME_MINUTES * 60 * 1000);
+
+            console.log('Tiempo total restante (minutos):', Math.floor(totalTimeLeft / (1000 * 60)));
+            console.log('Tiempo hasta auto-refresh (minutos):', Math.floor(timeUntilAutoRefresh / (1000 * 60)));
+
+            if (timeUntilAutoRefresh > 60000) {
+                console.log('Programando auto-refresh en', Math.floor(timeUntilAutoRefresh / (1000 * 60)), 'minutos');
+
+                autoRefreshTimeout = setTimeout(async () => {
+                    console.log('Ejecutando refresh automático...');
+                    await refreshToken(true);
+                }, timeUntilAutoRefresh);
+            } else {
+                console.log('No se programa auto-refresh - muy poco tiempo restante');
+            }
+        }
+
+        async function refreshToken(isAutomatic = false) {
+            try {
+                console.log('Iniciando refresh de token...', isAutomatic ? '(automático)' : '(manual)');
+
+                const response = await fetch('/api/refresh-token', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('Refresh exitoso:', data);
+
+                    if (!isAutomatic) {
+                        showNotification('¡Token refrescado exitosamente!', 'success');
+                    } else {
+                        showNotification('Token refrescado automáticamente', 'info');
+                    }
+
+                    await getTokenExpiration();
+                } else {
+                    const errorText = await response.text();
+                    console.error('Error al refrescar:', response.status, errorText);
+
+                    if (response.status === 401) {
+                        showNotification('Sesión expirada. Redirigiendo...', 'error');
+                        setTimeout(() => logout(), 2000);
+                    } else {
+                        showNotification(`Error al refrescar token: ${response.status}`, 'error');
+                    }
                 }
             } catch (error) {
                 console.error('Error refrescando token:', error);
-                alert('Error de red o servidor al refrescar el token.');
-                logout();
+                showNotification('Error de red al refrescar el token', 'error');
             }
+        }
+
+        function startCountdown() {
+            clearInterval(countdownInterval);
+            countdownInterval = setInterval(() => {
+                const now = new Date().getTime();
+                const distance = tokenExpirationTime - now;
+
+                if (distance < 0) {
+                    clearInterval(countdownInterval);
+                    clearTimeout(autoRefreshTimeout);
+                    document.getElementById('expiresIn').innerText = '¡Expirado!';
+                    showNotification('Sesión expirada. Redirigiendo...', 'error');
+                    setTimeout(() => logout(), 2000);
+                    return;
+                }
+
+                const hours = Math.floor(distance / (1000 * 60 * 60));
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+                if (hours > 0) {
+                    document.getElementById('expiresIn').innerText = `${hours}h ${minutes}m ${seconds}s`;
+                } else {
+                    document.getElementById('expiresIn').innerText = `${minutes}m ${seconds}s`;
+                }
+
+                const warningElement = document.getElementById('expirationMessage');
+                const criticalElement = document.getElementById('criticalMessage');
+
+                if (distance < CRITICAL_TIME_MINUTES * 60 * 1000) {
+                    warningElement.classList.add('d-none');
+                    criticalElement.classList.remove('d-none');
+                } else if (distance < WARNING_TIME_MINUTES * 60 * 1000) {
+                    warningElement.classList.remove('d-none');
+                    criticalElement.classList.add('d-none');
+                } else {
+                    warningElement.classList.add('d-none');
+                    criticalElement.classList.add('d-none');
+                }
+            }, 1000);
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            let alertClass = 'alert-info';
+            let icon = 'ℹ';
+
+            switch(type) {
+                case 'success':
+                    alertClass = 'alert-success';
+                    icon = '✓';
+                    break;
+                case 'error':
+                    alertClass = 'alert-danger';
+                    icon = '✗';
+                    break;
+                case 'warning':
+                    alertClass = 'alert-warning';
+                    icon = '⚠';
+                    break;
+            }
+
+            notification.className = `alert ${alertClass} position-fixed`;
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);';
+            notification.innerHTML = `
+                <strong>${icon}</strong> ${message}
+                <button type="button" class="btn-close float-end" onclick="this.parentElement.remove()"></button>
+            `;
+
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentElement) {
+                    notification.remove();
+                }
+            }, 5000);
+        }
+
+        function toggleAutoRefresh() {
+            AUTO_REFRESH_ENABLED = !AUTO_REFRESH_ENABLED;
+            const statusElement = document.getElementById('autoRefreshStatus');
+            statusElement.textContent = AUTO_REFRESH_ENABLED ? 'Activado' : 'Desactivado';
+
+            if (AUTO_REFRESH_ENABLED) {
+                scheduleAutoRefresh();
+                showNotification('Auto-refresh activado', 'success');
+            } else {
+                if (autoRefreshTimeout) {
+                    clearTimeout(autoRefreshTimeout);
+                }
+                showNotification('Auto-refresh desactivado', 'warning');
+            }
+        }
+
+        function updateDebugInfo(data) {
+            const debugContent = document.getElementById('debugContent');
+            const nextRefresh = AUTO_REFRESH_ENABLED ?
+                `En ${AUTO_REFRESH_TIME_MINUTES} minutos antes de expirar` :
+                'Desactivado';
+
+            debugContent.innerHTML = `
+                <pre>${JSON.stringify(data, null, 2)}</pre>
+                <p><strong>Configuración JWT:</strong> ${jwtExpirationMinutes} minutos</p>
+                <p><strong>Auto-refresh:</strong> ${nextRefresh}</p>
+                <p><strong>Advertencia en:</strong> ${WARNING_TIME_MINUTES} minutos</p>
+                <p><strong>Crítico en:</strong> ${CRITICAL_TIME_MINUTES} minutos</p>
+                <p><strong>URL actual:</strong> ${window.location.href}</p>
+            `;
         }
 
         function logout() {
-            // Eliminar la cookie del token
+            console.log('Iniciando logout...');
+
+            // Limpiar intervalos y timeouts
+            clearInterval(countdownInterval);
+            clearTimeout(autoRefreshTimeout);
+
+            // Limpiar cookies localmente
             document.cookie = 'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;';
-            clearInterval(countdownInterval); // Detener el contador
-            clearTimeout(tokenRefreshTimeout); // Detener el timeout de refresh
-            window.location.href = '/Login?logout=true'; // Redirigir al login con un parámetro para el mensaje
+
+            // Redirigir sin mostrar alertas adicionales
+            window.location.href = '/Login?logout=true';
         }
 
-        // Función para obtener el valor de una cookie
-        function getCookie(name) {
-            const nameEQ = name + "=";
-            const ca = document.cookie.split(';');
-            for(let i=0; i < ca.length; i++) {
-                let c = ca[i];
-                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
-                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
-            }
-            return null;
-        }
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Página cargada, obteniendo información del token...');
+            getTokenExpiration();
+        });
 
-        document.addEventListener('DOMContentLoaded', getTokenExpiration);
-        document.getElementById('refreshTokenBtn').addEventListener('click', refreshToken);
+        document.getElementById('refreshTokenBtn').addEventListener('click', () => refreshToken(false));
         document.getElementById('logoutBtn').addEventListener('click', logout);
+        document.getElementById('toggleAutoRefresh').addEventListener('click', toggleAutoRefresh);
+
+        document.getElementById('debugBtn').addEventListener('click', function() {
+            const debugInfo = document.getElementById('debugInfo');
+            debugInfo.classList.toggle('d-none');
+        });
     </script>
 }

@@ -18,16 +18,28 @@
                             @Model.ErrorMessage
                         </div>
                     }
+
+                    <!-- Mensaje de logout -->
+                    <div id="logoutMessage" class="alert alert-info d-none" role="alert">
+                        <strong>ℹ</strong> Tu sesión ha expirado. Por favor, inicia sesión de nuevo.
+                    </div>
+
+                    <!-- Mensaje de cookies limpiadas -->
+                    <div id="cookiesMessage" class="alert alert-success d-none" role="alert">
+                        <strong>✓</strong> Cookies limpiadas exitosamente.
+                    </div>
+
                     <form method="post">
                         <div class="mb-3">
                             <label for="username" class="form-label">Usuario</label>
-                            <input type="text" class="form-control" id="username" name="username" required>
+                            <input type="text" class="form-control" id="username" name="username" value="admin" required>
                         </div>
                         <div class="mb-3">
                             <label for="password" class="form-label">Contraseña</label>
-                            <input type="password" class="form-control" id="password" name="password" required>
+                            <input type="password" class="form-control" id="password" name="password" value="password" required>
                         </div>
                         <button type="submit" class="btn btn-primary">Entrar</button>
+                        <button type="button" id="clearCookies" class="btn btn-secondary">Limpiar Cookies</button>
                     </form>
                 </div>
             </div>
@@ -37,13 +49,73 @@
 
 @section Scripts {
     <script>
-        // Si el token expira, redirigir al login y mostrar mensaje
+        let messagesShown = false; // Bandera para evitar mostrar mensajes múltiples veces
+
+        // Función para mostrar mensaje sin alert()
+        function showMessage(elementId, duration = 5000) {
+            const element = document.getElementById(elementId);
+            if (element && !messagesShown) {
+                element.classList.remove('d-none');
+                setTimeout(() => {
+                    element.classList.add('d-none');
+                }, duration);
+            }
+        }
+
+        // Función para limpiar todas las cookies relacionadas con JWT
+        function clearAllJwtCookies() {
+            console.log('Limpiando todas las cookies JWT...');
+
+            // Limpiar con diferentes configuraciones posibles
+            const cookieConfigs = [
+                'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;',
+                'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; secure;',
+                'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; samesite=lax;',
+                'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; secure; samesite=lax;'
+            ];
+
+            cookieConfigs.forEach(config => {
+                document.cookie = config;
+            });
+
+            showMessage('cookiesMessage');
+        }
+
+        // Manejar parámetros de URL una sola vez
         document.addEventListener('DOMContentLoaded', function() {
-            const logoutParam = new URLSearchParams(window.location.search).get('logout');
-            if (logoutParam === 'true') {
-                alert('¡Tu sesión ha expirado! Por favor, inicia sesión de nuevo.');
-                // Limpiar cualquier token almacenado en localStorage si aplica
-                localStorage.removeItem('jwtToken');
+            const urlParams = new URLSearchParams(window.location.search);
+            const logoutParam = urlParams.get('logout');
+
+            if (logoutParam === 'true' && !messagesShown) {
+                messagesShown = true; // Marcar que ya se mostraron los mensajes
+
+                console.log('Parámetro logout detectado, limpiando cookies...');
+
+                // Mostrar mensaje de logout
+                showMessage('logoutMessage', 8000);
+
+                // Limpiar cookies sin mostrar mensaje adicional
+                const cookieConfigs = [
+                    'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;',
+                    'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; secure;',
+                    'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; samesite=lax;',
+                    'jwtToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; secure; samesite=lax;'
+                ];
+
+                cookieConfigs.forEach(config => {
+                    document.cookie = config;
+                });
+
+                // Limpiar el parámetro de la URL sin recargar
+                const newUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, newUrl);
+            }
+        });
+
+        // Botón para limpiar cookies manualmente
+        document.getElementById('clearCookies').addEventListener('click', function() {
+            if (!messagesShown) {
+                clearAllJwtCookies();
             }
         });
     </script>
